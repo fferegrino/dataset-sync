@@ -40,7 +40,7 @@ jobs:
       - uses: fferegrino/dataset-sync/fetch@v1
         with:
           from: ${{ inputs.source || 'huggingface' }}
-          huggingface-dataset: fferegrino/yugioh-decks
+          huggingface-dataset: feregrino/yugioh-decks
           kaggle-dataset: ioexception/yugioh-decks
           kaggle-username: ioexception
           kaggle-key: ${{ secrets.KAGGLE_KEY }}
@@ -50,7 +50,7 @@ jobs:
 
       - uses: fferegrino/dataset-sync/publish@v1
         with:
-          huggingface-dataset: fferegrino/yugioh-decks
+          huggingface-dataset: feregrino/yugioh-decks
           huggingface-card: dataset-card.md
           kaggle-dataset: ioexception/yugioh-decks
           kaggle-metadata: dataset-metadata.json
