@@ -36,6 +36,8 @@ class FakeKaggleApi:
         self.served = None  # what a download returns, when it should differ from what is stored
         self.download_failures = download_failures
         self.upload_failures = upload_failures
+        self.throttled_pages = {}  # page token -> how many more times that page answers 429
+        self.list_calls = 0
         self.versions = []
 
     def dataset_download_files(self, dataset, path, force, quiet, unzip):
@@ -48,6 +50,10 @@ class FakeKaggleApi:
 
     def dataset_list_files(self, dataset, page_token=None, page_size=20):
         # One file per page, so every listing exercises pagination.
+        self.list_calls += 1
+        if self.throttled_pages.get(page_token):
+            self.throttled_pages[page_token] -= 1
+            raise RuntimeError("429 Too Many Requests")
         names = sorted(self.files)
         index = int(page_token or 0)
         page = [SimpleNamespace(name=name, total_bytes=len(self.files[name])) for name in names[index:index + 1]]
@@ -105,8 +111,16 @@ class FakeHfApi:
 
 HUB_EXTRAS = {"README.md": b"old card", ".gitattributes": b"*.csv filter=lfs"}
 
+# Kaggle extracts the per-directory zips a version is uploaded as, so it lists nested files by their full path.
+POSTS = {
+    "2015/04/27/first.json": b'{"title": "first"}',
+    "2015/04/28/second.json": b'{"title": "second"}',
+    "2016/01/02/third.json": b'{"title": "third"}',
+}
+
 
 @mock.patch.object(retry, "RETRY_DELAYS_SECONDS", (0, 0, 0))
+@mock.patch.object(retry, "PAGE_RETRY_DELAYS_SECONDS", (0, 0, 0))
 class SyncTest(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
@@ -358,6 +372,43 @@ class SyncTest(unittest.TestCase):
         self.hub.upload_failures = 1
         self.kaggle.upload_failures = 2
         self.assertEqual(self.publish(), ["kaggle", "huggingface"])
+
+    def test_kaggle_listing_retries_only_the_throttled_page(self):
+        self.kaggle.throttled_pages = {"1": 2}
+        self.fetch_from(self.kaggle_backend())
+        self.assertEqual(read_tree(self.data), DECKS)
+        # Two pages, plus two retries of the second; the first page is not listed again.
+        self.assertEqual(self.kaggle.list_calls, 4)
+
+    def test_kaggle_listing_gives_up_on_a_page_that_stays_throttled(self):
+        self.kaggle.throttled_pages = {"1": 3}
+        with self.assertRaisesRegex(SystemExit, "listing page of ioexception/yugioh-decks failed: 429"):
+            self.fetch_from(self.kaggle_backend())
+        self.assertFalse(self.data.exists())
+
+    def test_nested_paths_round_trip(self):
+        self.kaggle.files = dict(POSTS)
+        self.hub.files = dict(HUB_EXTRAS)
+        self.fetch_from(self.kaggle_backend())
+        self.assertEqual(read_tree(self.data), POSTS)
+        new_post = self.data / "2016" / "01" / "03" / "fourth.json"
+        new_post.parent.mkdir(parents=True)
+        new_post.write_bytes(b'{"title": "fourth"}')
+        self.assertEqual(self.publish(append_only=["*.json"]), ["huggingface", "kaggle"])
+        expected = {**POSTS, "2016/01/03/fourth.json": b'{"title": "fourth"}'}
+        self.assertEqual(self.kaggle.files, expected)
+        self.assertEqual({k: v for k, v in self.hub.files.items() if k not in HUB_EXTRAS}, expected)
+
+    def test_nested_paths_are_guarded(self):
+        self.kaggle.files = dict(POSTS)
+        self.fetch_from(self.kaggle_backend())
+        (self.data / "2015" / "04" / "28" / "second.json").write_bytes(b'{"title": "edited"}')
+        with self.assertRaisesRegex(SystemExit, "2015/04/28/second.json changed existing content"):
+            self.publish(append_only=["*.json"])
+        (self.data / "2015" / "04" / "28" / "second.json").unlink()
+        with self.assertRaisesRegex(SystemExit, "2015/04/28/second.json was deleted"):
+            self.publish(append_only=[])
+        self.assertEqual((self.hub.commits, self.kaggle.versions), ([], []))
 
     def test_parse_patterns(self):
         self.assertEqual(parse_patterns(" *.csv, data/*.txt\n"), ["*.csv", "data/*.txt"])

@@ -82,6 +82,8 @@ Each upload is a full replacement, the same as a Kaggle version: on Hugging Face
 
 Kaggle keeps every dataset version and a Hugging Face dataset is a git repository, so even a bad upload can be rolled back.
 
+Every call to a destination is retried after 15 and 45 seconds. Kaggle lists files 200 per page and rate limits the calls, so each page of a Kaggle listing is retried on its own, waiting up to four minutes, before the run gives up.
+
 ## Inputs
 
 ### `fetch`

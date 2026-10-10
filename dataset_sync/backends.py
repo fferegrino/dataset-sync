@@ -5,6 +5,7 @@ import tempfile
 import zipfile
 from pathlib import Path
 
+from dataset_sync import retry
 from dataset_sync.files import data_files, is_data_path, staged
 
 
@@ -54,7 +55,9 @@ class Kaggle:
         files = {}
         page_token = None
         while True:
-            response = self.api.dataset_list_files(self.dataset, page_token=page_token, page_size=200)
+            response = retry.with_retries(
+                lambda: self.api.dataset_list_files(self.dataset, page_token=page_token, page_size=200),
+                f"kaggle file listing page of {self.dataset}", delays=retry.PAGE_RETRY_DELAYS_SECONDS)
             if response.error_message:
                 raise RuntimeError(f"Kaggle could not list {self.dataset}: {response.error_message}")
             for entry in response.files:
