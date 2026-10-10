@@ -74,7 +74,13 @@ Mirrors are uploaded before the source. If a mirror fails, the source still hold
 
 Each upload is a full replacement, the same as a Kaggle version: on Hugging Face, files that no longer exist locally are deleted, apart from `README.md` and `.gitattributes`. `dataset-metadata.json`, `README.md` and `.gitattributes` at the top of the data directory are always treated as metadata, never data.
 
-`append-only` lists glob patterns of files that may only grow. A run that deletes, shrinks or rewrites the existing bytes of one of them fails before uploading anywhere.
+## Guards against losing data
+
+- `fetch` compares what it downloaded with the source's own file list: every file must be present at the right size, and match its sha256 where the source has one (large files on Hugging Face). Otherwise the run stops and the data directory is left as it was, because anything missing would later look deleted.
+- `publish` refuses to delete anything unless `allow-deletions` is set: neither files removed from the data directory since `fetch`, nor files a destination holds that the directory lacks (a mirror that drifted, or a file added by hand). This is checked for every destination before anything is uploaded.
+- `append-only` lists glob patterns of files that may only grow. A run that deletes, shrinks or rewrites the existing bytes of one of them fails before uploading anywhere.
+
+Kaggle keeps every dataset version and a Hugging Face dataset is a git repository, so even a bad upload can be rolled back.
 
 ## Inputs
 
@@ -101,6 +107,7 @@ Each upload is a full replacement, the same as a Kaggle version: on Hugging Face
 | `append-only` | | Space or comma separated glob patterns |
 | `message` | `<today> update` | Commit message / version notes |
 | `force` | `false` | Upload everywhere even if nothing changed |
+| `allow-deletions` | `false` | Let uploads remove files the fetched data or a destination has but the directory lacks |
 | `huggingface-token` | | Write token, needed when uploading to Hugging Face |
 | `kaggle-username`, `kaggle-key` | | Needed when uploading to Kaggle |
 
@@ -120,7 +127,7 @@ export HF_TOKEN=... KAGGLE_USERNAME=... KAGGLE_KEY=...
 .venv/bin/python -m dataset_sync.publish --path data --state-dir .state --huggingface-dataset owner/name --dry-run
 ```
 
-`fetch` refuses to overwrite a non-empty directory unless you pass `--replace`.
+`fetch` refuses to overwrite a non-empty directory unless you pass `--replace`. `--dry-run` runs the local checks only: it needs no credentials, so it does not ask the destinations which files they hold.
 
 ## Tests
 

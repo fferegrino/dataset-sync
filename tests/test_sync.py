@@ -1,10 +1,12 @@
 import fnmatch
+import hashlib
 import json
 import sys
 import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -31,6 +33,7 @@ class FakeKaggleApi:
 
     def __init__(self, files, download_failures=0, upload_failures=0):
         self.files = dict(files)
+        self.served = None  # what a download returns, when it should differ from what is stored
         self.download_failures = download_failures
         self.upload_failures = upload_failures
         self.versions = []
@@ -40,8 +43,16 @@ class FakeKaggleApi:
             self.download_failures -= 1
             raise RuntimeError("download blip")
         with zipfile.ZipFile(Path(path) / f"{dataset.split('/')[1]}.zip", "w") as bundle:
-            for name, content in self.files.items():
+            for name, content in (self.served if self.served is not None else self.files).items():
                 bundle.writestr(name, content)
+
+    def dataset_list_files(self, dataset, page_token=None, page_size=20):
+        # One file per page, so every listing exercises pagination.
+        names = sorted(self.files)
+        index = int(page_token or 0)
+        page = [SimpleNamespace(name=name, total_bytes=len(self.files[name])) for name in names[index:index + 1]]
+        next_token = str(index + 1) if index + 1 < len(names) else ""
+        return SimpleNamespace(files=page, next_page_token=next_token, error_message="")
 
     def dataset_create_version(self, folder, message, dir_mode, quiet):
         if self.upload_failures:
@@ -57,20 +68,26 @@ class FakeHfApi:
 
     def __init__(self, files=None, upload_failures=0):
         self.files = dict(files or {})
+        self.served = None  # what a download returns, when it should differ from what is stored
         self.upload_failures = upload_failures
         self.commits = []
 
     def snapshot_download(self, repo_id, repo_type, local_dir):
         assert repo_type == "dataset"
-        for name, content in self.files.items():
+        for name, content in (self.served if self.served is not None else self.files).items():
             target = Path(local_dir) / name
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(content)
         (Path(local_dir) / ".cache" / "huggingface").mkdir(parents=True)
         (Path(local_dir) / ".cache" / "huggingface" / "download.lock").write_text("")
 
-    def list_repo_files(self, repo_id, repo_type):
-        return list(self.files)
+    def list_repo_tree(self, repo_id, recursive, repo_type):
+        # Like the Hub, only large (LFS) files carry a sha256; here every CSV is treated as one.
+        entries = [SimpleNamespace(path="nested", tree_id="abc")]
+        for name, content in self.files.items():
+            lfs = SimpleNamespace(sha256=hashlib.sha256(content).hexdigest()) if name.endswith(".csv") else None
+            entries.append(SimpleNamespace(path=name, size=len(content), lfs=lfs))
+        return entries
 
     def upload_folder(self, repo_id, repo_type, folder_path, commit_message, delete_patterns):
         if self.upload_failures:
@@ -212,8 +229,70 @@ class SyncTest(unittest.TestCase):
         self.hub.files["00000099.csv"] = b"gone"
         self.fetch_from(self.huggingface())
         (self.data / "00000099.csv").unlink()
-        self.publish(destinations=[HuggingFace("fferegrino/yugioh-decks", api=self.hub)], append_only=[])
+        self.publish(destinations=[HuggingFace("fferegrino/yugioh-decks", api=self.hub)], append_only=[],
+                     allow_deletions=True)
         self.assertEqual(self.hub.files, {**DECKS, **HUB_EXTRAS})
+
+    # guards against losing data
+
+    def test_fetch_refuses_a_download_missing_files(self):
+        self.hub.served = {"00000073.csv": DECKS["00000073.csv"]}
+        with self.assertRaisesRegex(SystemExit, "_last_deck_num.txt is missing"):
+            self.fetch_from(self.huggingface())
+        self.assertFalse(self.data.exists())
+        self.assertIsNone(load_state(self.state))
+
+    def test_fetch_refuses_a_truncated_download(self):
+        self.kaggle.served = {**DECKS, "00000073.csv": DECKS["00000073.csv"][:-4]}
+        with self.assertRaisesRegex(SystemExit, "expected"):
+            self.fetch_from(self.kaggle_backend())
+        self.assertFalse(self.data.exists())
+
+    def test_fetch_refuses_a_corrupted_download_when_the_source_has_hashes(self):
+        self.hub.served = {**DECKS, "00000073.csv": DECKS["00000073.csv"].replace(b"a", b"z")}
+        with self.assertRaisesRegex(SystemExit, "sha256"):
+            self.fetch_from(self.huggingface())
+
+    def test_fetch_keeps_the_previous_data_when_verification_fails(self):
+        self.data.mkdir()
+        (self.data / "00000073.csv").write_bytes(b"previous")
+        self.hub.served = {"00000073.csv": DECKS["00000073.csv"]}
+        with self.assertRaises(SystemExit):
+            self.fetch_from(self.huggingface(), replace=True)
+        self.assertEqual((self.data / "00000073.csv").read_bytes(), b"previous")
+
+    def test_local_deletions_need_allow_deletions(self):
+        self.fetch_from(self.huggingface())
+        (self.data / "_last_deck_num.txt").unlink()
+        with self.assertRaisesRegex(SystemExit, "_last_deck_num.txt was deleted"):
+            self.publish()
+        self.assertEqual((self.hub.commits, self.kaggle.versions), ([], []))
+        self.assertEqual(self.publish(allow_deletions=True), ["kaggle", "huggingface"])
+        self.assertNotIn("_last_deck_num.txt", self.hub.files)
+        self.assertNotIn("_last_deck_num.txt", self.kaggle.files)
+
+    def test_hub_mirror_with_extra_files_needs_allow_deletions(self):
+        self.hub.files["00000001.csv"] = b"only on the hub"
+        self.fetch_from(self.kaggle_backend())
+        self.append_deck()
+        with self.assertRaisesRegex(SystemExit, "00000001.csv would be deleted from huggingface"):
+            self.publish()
+        self.assertEqual((self.hub.commits, self.kaggle.versions), ([], []))
+        self.publish(allow_deletions=True)
+        self.assertNotIn("00000001.csv", self.hub.files)
+
+    def test_kaggle_mirror_with_extra_files_needs_allow_deletions(self):
+        self.kaggle.files["00000001.csv"] = b"only on kaggle"
+        self.fetch_from(self.huggingface())
+        self.append_deck()
+        with self.assertRaisesRegex(SystemExit, "00000001.csv would be deleted from kaggle"):
+            self.publish()
+        self.assertEqual((self.hub.commits, self.kaggle.versions), ([], []))
+
+    def test_skipped_destinations_are_not_checked_for_deletions(self):
+        self.kaggle.files["00000001.csv"] = b"only on kaggle"
+        self.fetch_from(self.huggingface())
+        self.assertEqual(self.publish(), [])
 
     def test_append_only_violations_block_every_upload(self):
         self.fetch_from(self.huggingface())
@@ -259,7 +338,8 @@ class SyncTest(unittest.TestCase):
 
     def test_publish_without_fetch_needs_force(self):
         self.data.mkdir()
-        (self.data / "00000073.csv").write_bytes(DECKS["00000073.csv"])
+        for name, content in DECKS.items():
+            (self.data / name).write_bytes(content)
         with self.assertRaisesRegex(SystemExit, "fetch"):
             self.publish()
         self.assertEqual(self.publish(force=True), ["huggingface", "kaggle"])

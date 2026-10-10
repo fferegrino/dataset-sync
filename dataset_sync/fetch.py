@@ -6,7 +6,7 @@ import tempfile
 from pathlib import Path
 
 from dataset_sync import backends
-from dataset_sync.files import fingerprint, save_state, state_file, strip_non_data
+from dataset_sync.files import fingerprint, listing_problems, save_state, state_file, strip_non_data
 from dataset_sync.retry import with_retries
 
 
@@ -31,6 +31,13 @@ def fetch(backend, directory, state_path, replace=False):
         prints = fingerprint(staging)
         if not prints:
             raise SystemExit(f"{backend.name} returned no files for {backend.dataset}; refusing to continue")
+
+        # publish treats anything missing here as deleted, so a short download must stop the run, not shrink the data.
+        listing = with_retries(backend.listing, f"{backend.name} file listing of {backend.dataset}")
+        problems = listing_problems(listing, prints)
+        if problems:
+            raise SystemExit(f"Download of {backend.dataset} does not match {backend.name}'s file list:\n  "
+                             + "\n  ".join(problems))
 
         if target.exists():
             shutil.rmtree(target)
