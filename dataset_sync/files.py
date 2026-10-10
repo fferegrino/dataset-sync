@@ -14,16 +14,35 @@ IGNORED_DIRS = frozenset({".cache"})
 CHUNK_SIZE = 1 << 20
 
 
+def is_data_path(name):
+    """Whether a relative posix path names dataset contents rather than metadata or bookkeeping."""
+    parts = name.split("/")
+    return parts[0] not in IGNORED_DIRS and not (len(parts) == 1 and name in METADATA_NAMES)
+
+
 def data_files(directory):
     """Yield (relative posix path, path) for every data file, skipping top-level metadata."""
     root = Path(directory)
     for path in sorted(root.rglob("*")):
-        relative = path.relative_to(root)
-        if not path.is_file() or relative.parts[0] in IGNORED_DIRS:
+        name = path.relative_to(root).as_posix()
+        if path.is_file() and is_data_path(name):
+            yield name, path
+
+
+def listing_problems(listing, prints):
+    """Compare downloaded files with what the source says it holds; sha256 is only checked where the source has one."""
+    problems = []
+    for name, expected in sorted(listing.items()):
+        if not is_data_path(name):
             continue
-        if len(relative.parts) == 1 and relative.name in METADATA_NAMES:
-            continue
-        yield relative.as_posix(), path
+        got = prints.get(name)
+        if got is None:
+            problems.append(f"{name} is missing")
+        elif got["size"] != expected["size"]:
+            problems.append(f"{name} is {got['size']} bytes, expected {expected['size']}")
+        elif expected.get("sha256") and got["sha256"] != expected["sha256"]:
+            problems.append(f"{name} does not match its sha256")
+    return problems
 
 
 def strip_non_data(directory):

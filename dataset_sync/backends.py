@@ -5,7 +5,7 @@ import tempfile
 import zipfile
 from pathlib import Path
 
-from dataset_sync.files import data_files, staged
+from dataset_sync.files import data_files, is_data_path, staged
 
 
 class Kaggle:
@@ -50,6 +50,24 @@ class Kaggle:
             with zipfile.ZipFile(archives[0]) as bundle:
                 bundle.extractall(destination)
 
+    def listing(self):
+        files = {}
+        page_token = None
+        while True:
+            response = self.api.dataset_list_files(self.dataset, page_token=page_token, page_size=200)
+            if response.error_message:
+                raise RuntimeError(f"Kaggle could not list {self.dataset}: {response.error_message}")
+            for entry in response.files:
+                files[entry.name] = {"size": entry.total_bytes, "sha256": None}
+            page_token = response.next_page_token
+            if not page_token:
+                return files
+
+    def pending_deletions(self, directory):
+        # A new version replaces every file, so anything Kaggle has that the directory lacks would disappear.
+        local = {name for name, _path in data_files(directory)}
+        return sorted(name for name in self.listing() if is_data_path(name) and name not in local)
+
     def upload(self, directory, message):
         with staged(directory, {"dataset-metadata.json": self.metadata}) as folder:
             self.api.dataset_create_version(str(folder), message, dir_mode="zip", quiet=False)
@@ -59,8 +77,6 @@ class HuggingFace:
     name = "huggingface"
     # upload_folder skips files whose content is already on the Hub, so syncing on every run is cheap and safe.
     idempotent = True
-    # The dataset card and LFS settings belong to the repository, not the data, so a sync never deletes them.
-    KEEP_REMOTE = frozenset({".gitattributes", "README.md"})
 
     def __init__(self, dataset, card=None, api=None):
         self.dataset = dataset
@@ -87,11 +103,22 @@ class HuggingFace:
     def download(self, destination):
         self.api.snapshot_download(repo_id=self.dataset, repo_type="dataset", local_dir=str(destination))
 
-    def upload(self, directory, message):
-        local = {name for name, _path in data_files(directory)}
-        remote = set(self.api.list_repo_files(self.dataset, repo_type="dataset"))
+    def listing(self):
+        files = {}
+        for entry in self.api.list_repo_tree(self.dataset, recursive=True, repo_type="dataset"):
+            if getattr(entry, "size", None) is None:  # folders have no size
+                continue
+            lfs = getattr(entry, "lfs", None)
+            files[entry.path] = {"size": entry.size, "sha256": lfs.sha256 if lfs else None}
+        return files
+
+    def pending_deletions(self, directory):
         # A Kaggle version replaces the whole dataset; deleting files that are gone locally gives the Hub the same meaning.
-        stale = sorted(remote - local - self.KEEP_REMOTE)
+        local = {name for name, _path in data_files(directory)}
+        return sorted(name for name in self.listing() if is_data_path(name) and name not in local)
+
+    def upload(self, directory, message):
+        stale = self.pending_deletions(directory)
         extras = {"README.md": self.card} if self.card else {}
         with staged(directory, extras) as folder:
             self.api.upload_folder(

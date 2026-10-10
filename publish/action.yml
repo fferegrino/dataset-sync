@@ -26,6 +26,9 @@ inputs:
   force:
     description: Upload to every destination even if nothing changed, e.g. to seed a new one
     default: "false"
+  allow-deletions:
+    description: Let uploads remove files that the fetched data or a destination has but the directory lacks
+    default: "false"
   huggingface-token:
     description: Hugging Face token with write access
     default: ""
@@ -63,12 +66,14 @@ runs:
         APPEND_ONLY: ${{ inputs.append-only }}
         MESSAGE: ${{ inputs.message }}
         FORCE: ${{ inputs.force }}
+        ALLOW_DELETIONS: ${{ inputs.allow-deletions }}
         HF_TOKEN: ${{ inputs.huggingface-token }}
         KAGGLE_USERNAME: ${{ inputs.kaggle-username }}
         KAGGLE_KEY: ${{ inputs.kaggle-key }}
       run: |
         args=()
         if [ "$FORCE" = "true" ]; then args+=(--force); fi
+        if [ "$ALLOW_DELETIONS" = "true" ]; then args+=(--allow-deletions); fi
         if [ -n "$MESSAGE" ]; then args+=(--message "$MESSAGE"); fi
         PYTHONPATH="$DATASET_SYNC_ROOT" "$DATASET_SYNC_PYTHON" -m dataset_sync.publish \
           --path "$DATA_PATH" \

@@ -37,6 +37,12 @@ def upload_order(destinations, source):
     return sorted(destinations, key=lambda backend: backend.name == source)
 
 
+def wants_upload(backend, source, changed, force):
+    if backend.name == source:
+        return changed or force
+    return changed or force or backend.idempotent
+
+
 def write_outputs(github_output, changed, uploaded):
     if github_output:
         with open(github_output, "a") as handle:
@@ -45,7 +51,7 @@ def write_outputs(github_output, changed, uploaded):
 
 
 def publish(destinations, directory, state_path, append_only=(), message=None, force=False, dry_run=False,
-            github_output=None):
+            allow_deletions=False, github_output=None):
     if not destinations:
         raise SystemExit("No destinations configured")
     directory = Path(directory)
@@ -63,6 +69,9 @@ def publish(destinations, directory, state_path, append_only=(), message=None, f
         added, removed, modified = describe_changes(state["fingerprint"], after)
         print(f"Added: {added or '-'}\nRemoved: {removed or '-'}\nModified: {modified or '-'}")
         violations = append_only_violations(state["fingerprint"], after, directory, append_only)
+        if removed and not allow_deletions:
+            violations += [f"{name} was deleted (pass allow-deletions to publish deletions)" for name in removed
+                           if f"{name} was deleted" not in violations]
         if violations:
             raise SystemExit("Refusing to upload:\n  " + "\n  ".join(violations))
     elif state:
@@ -78,19 +87,33 @@ def publish(destinations, directory, state_path, append_only=(), message=None, f
         if not dry_run:
             backend.check_credentials()
 
+    planned = [backend for backend in upload_order(destinations, source)
+               if wants_upload(backend, source, changed, force)]
+    for backend in destinations:
+        if backend not in planned:
+            print(f"Skipping {backend.name}: nothing changed")
+
+    if dry_run:
+        for backend in planned:
+            print(f"Dry run: would upload to {backend.name} {backend.dataset} (deletions not checked)")
+        write_outputs(github_output, changed, [])
+        return []
+
+    # Uploads replace whole datasets, so a destination holding files the directory lacks would lose them. That is
+    # how a mirror that drifted, or a source edited by hand, loses data; refuse unless deletions are intended.
+    if not allow_deletions:
+        doomed = []
+        for backend in planned:
+            pending = with_retries(lambda: backend.pending_deletions(directory),
+                                   f"{backend.name} file listing of {backend.dataset}")
+            doomed += [f"{name} would be deleted from {backend.name}" for name in pending]
+        if doomed:
+            raise SystemExit("Refusing to upload:\n  " + "\n  ".join(doomed)
+                             + "\nPass allow-deletions if these files should go.")
+
     message = message or f"{date.today()} update"
     uploaded = []
-    for backend in upload_order(destinations, source):
-        if backend.name == source:
-            wanted = changed or force
-        else:
-            wanted = changed or force or backend.idempotent
-        if not wanted:
-            print(f"Skipping {backend.name}: nothing changed")
-            continue
-        if dry_run:
-            print(f"Dry run: would upload to {backend.name} {backend.dataset}")
-            continue
+    for backend in planned:
         with_retries(lambda: backend.upload(directory, message), f"{backend.name} upload to {backend.dataset}")
         print(f"Uploaded to {backend.name} {backend.dataset}")
         uploaded.append(backend.name)
@@ -106,7 +129,10 @@ def main():
     parser.add_argument("--append-only", default="", help="glob patterns of files that may only be appended to")
     parser.add_argument("--message", help="commit message / version notes; defaults to '<today> update'")
     parser.add_argument("--force", action="store_true", help="upload to every destination even if nothing changed")
-    parser.add_argument("--dry-run", action="store_true", help="run every check but skip the uploads")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="run the local checks but skip the uploads and the destination deletion check")
+    parser.add_argument("--allow-deletions", action="store_true",
+                        help="let uploads remove files the destinations have but the directory lacks")
     backends.add_arguments(parser)
     args = parser.parse_args()
 
@@ -118,6 +144,7 @@ def main():
         message=args.message,
         force=args.force,
         dry_run=args.dry_run,
+        allow_deletions=args.allow_deletions,
         github_output=os.environ.get("GITHUB_OUTPUT"),
     )
 
