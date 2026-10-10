@@ -1,9 +1,10 @@
 # dataset-sync
 
-Two composite GitHub Actions that keep a dataset on Hugging Face and/or Kaggle up to date without storing the data in git:
+Composite GitHub Actions that keep a dataset on Hugging Face and/or Kaggle up to date without storing the data in git:
 
 - **`fetch`** downloads the current dataset from its source of truth (Hugging Face by default, or Kaggle) into a directory.
 - **`publish`** uploads that directory to every configured destination if it changed since `fetch`, updating the source of truth last.
+- **`ping`** pings a [healthchecks.io](https://healthchecks.io) check, so a run that stops happening or fails before `publish` raises an alert.
 
 Anything can run between them, in any language: the actions install their own dependencies into a private virtualenv and leave the job's toolchain alone.
 
@@ -58,6 +59,14 @@ jobs:
           huggingface-token: ${{ secrets.HF_TOKEN }}
           kaggle-username: ioexception
           kaggle-key: ${{ secrets.KAGGLE_KEY }}
+          healthcheck-url: ${{ secrets.HEALTHCHECK_URL }}
+
+      # Reports failures in the steps before publish, which never runs then.
+      - uses: fferegrino/dataset-sync/ping@v1
+        if: failure()
+        with:
+          url: ${{ secrets.HEALTHCHECK_URL }}
+          status: fail
 ```
 
 The repository keeps its code plus each destination's metadata (`dataset-metadata.json` for Kaggle, a dataset card for Hugging Face); the data directory should not be committed.
@@ -83,6 +92,12 @@ Each upload is a full replacement, the same as a Kaggle version: on Hugging Face
 Kaggle keeps every dataset version and a Hugging Face dataset is a git repository, so even a bad upload can be rolled back.
 
 Every call to a destination is retried after 15 and 45 seconds. Kaggle lists files 200 per page and rate limits the calls, so each page of a Kaggle listing is retried on its own, waiting up to four minutes, before the run gives up.
+
+## Dead man's switch
+
+A scheduled workflow that stops running, or keeps failing, is silent by default. With `healthcheck-url` set, `publish` pings the check after every successful run, whether or not anything was uploaded, and pings `<url>/fail` when it fails. A failure earlier in the job skips `publish`, so add the `ping` action with `if: failure()` and `status: fail` at the end of the job, as in the usage example; a failure in `publish` then pings `/fail` twice, which is harmless. Set the check's period to the schedule and its grace to a bit more than a normal run.
+
+Pings never fail the job, and an empty URL skips them, so forks and workflows without the secret still run. Jobs that do not use `publish` can report success with `ping` too.
 
 ## Inputs
 
@@ -112,8 +127,16 @@ Every call to a destination is retried after 15 and 45 seconds. Kaggle lists fil
 | `allow-deletions` | `false` | Let uploads remove files the fetched data or a destination has but the directory lacks |
 | `huggingface-token` | | Write token, needed when uploading to Hugging Face |
 | `kaggle-username`, `kaggle-key` | | Needed when uploading to Kaggle |
+| `healthcheck-url` | | Ping URL of a healthchecks.io check; leave empty to skip the pings |
 
 Outputs: `changed` (`'true'` when the data differs from what `fetch` downloaded) and `uploaded` (comma-separated destinations that received an upload).
+
+### `ping`
+
+| Input | Default | Description |
+| --- | --- | --- |
+| `url` | | Ping URL of the check; skipped with a warning when empty |
+| `status` | `success` | `success`, `fail` or `start` |
 
 ## Adding a new destination
 

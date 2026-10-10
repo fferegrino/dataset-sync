@@ -38,6 +38,9 @@ inputs:
   kaggle-key:
     description: Kaggle API key
     default: ""
+  healthcheck-url:
+    description: healthchecks.io-style ping URL, pinged when publishing succeeds (even with nothing to upload) and at /fail when it fails; leave empty to skip
+    default: ""
 
 outputs:
   changed:
@@ -84,3 +87,20 @@ runs:
           --kaggle-dataset "$KAGGLE_DATASET" \
           --kaggle-metadata "$KAGGLE_METADATA" \
           "${args[@]}"
+
+    # A successful run pings even when nothing changed: the check watches that the job keeps running, not that the
+    # data keeps changing.
+    - name: Ping healthcheck
+      if: success() && inputs.healthcheck-url != ''
+      shell: bash
+      env:
+        HEALTHCHECK_URL: ${{ inputs.healthcheck-url }}
+      run: '"$GITHUB_ACTION_PATH/../ping.sh" "$HEALTHCHECK_URL" success'
+
+    # Reports a refused or failed upload straight away instead of making the check wait out its grace period.
+    - name: Report failure to healthcheck
+      if: failure() && inputs.healthcheck-url != ''
+      shell: bash
+      env:
+        HEALTHCHECK_URL: ${{ inputs.healthcheck-url }}
+      run: '"$GITHUB_ACTION_PATH/../ping.sh" "$HEALTHCHECK_URL" fail'

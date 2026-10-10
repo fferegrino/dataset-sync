@@ -1,0 +1,20 @@
+name: Ping healthcheck
+description: Ping a healthchecks.io-style dead man's switch, e.g. to report a failure in a step before publish. Never fails the job.
+
+inputs:
+  url:
+    description: Ping URL of the check; skipped with a warning when empty
+    default: ""
+  status:
+    description: success, fail or start
+    default: success
+
+runs:
+  using: composite
+  steps:
+    - name: Ping healthcheck (${{ inputs.status }})
+      shell: bash
+      env:
+        HEALTHCHECK_URL: ${{ inputs.url }}
+        HEALTHCHECK_STATUS: ${{ inputs.status }}
+      run: '"$GITHUB_ACTION_PATH/../ping.sh" "$HEALTHCHECK_URL" "$HEALTHCHECK_STATUS"'
