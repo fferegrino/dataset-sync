@@ -1,0 +1,81 @@
+name: Publish dataset
+description: Upload a dataset directory to Hugging Face and/or Kaggle when it changed since fetch, updating the source of truth last.
+
+inputs:
+  huggingface-dataset:
+    description: owner/name of the Hugging Face dataset repository; leave empty to skip Hugging Face
+    default: ""
+  huggingface-card:
+    description: README.md dataset card to upload to Hugging Face; leave empty to keep the card already there
+    default: ""
+  kaggle-dataset:
+    description: owner/slug of the Kaggle dataset; leave empty to skip Kaggle
+    default: ""
+  kaggle-metadata:
+    description: dataset-metadata.json for Kaggle
+    default: dataset-metadata.json
+  path:
+    description: Directory holding the dataset files
+    default: data
+  append-only:
+    description: Glob patterns (space or comma separated) of files that may only be appended to; anything else refuses the upload
+    default: ""
+  message:
+    description: Commit message / version notes; defaults to "<today> update"
+    default: ""
+  force:
+    description: Upload to every destination even if nothing changed, e.g. to seed a new one
+    default: "false"
+  huggingface-token:
+    description: Hugging Face token with write access
+    default: ""
+  kaggle-username:
+    description: Kaggle username
+    default: ""
+  kaggle-key:
+    description: Kaggle API key
+    default: ""
+
+outputs:
+  changed:
+    description: "'true' when the data differs from what fetch downloaded"
+    value: ${{ steps.publish.outputs.changed }}
+  uploaded:
+    description: Comma-separated destinations that received an upload
+    value: ${{ steps.publish.outputs.uploaded }}
+
+runs:
+  using: composite
+  steps:
+    - name: Set up dataset-sync
+      shell: bash
+      run: '"$GITHUB_ACTION_PATH/../setup.sh"'
+
+    - name: Publish dataset
+      id: publish
+      shell: bash
+      env:
+        HUGGINGFACE_DATASET: ${{ inputs.huggingface-dataset }}
+        HUGGINGFACE_CARD: ${{ inputs.huggingface-card }}
+        KAGGLE_DATASET: ${{ inputs.kaggle-dataset }}
+        KAGGLE_METADATA: ${{ inputs.kaggle-metadata }}
+        DATA_PATH: ${{ inputs.path }}
+        APPEND_ONLY: ${{ inputs.append-only }}
+        MESSAGE: ${{ inputs.message }}
+        FORCE: ${{ inputs.force }}
+        HF_TOKEN: ${{ inputs.huggingface-token }}
+        KAGGLE_USERNAME: ${{ inputs.kaggle-username }}
+        KAGGLE_KEY: ${{ inputs.kaggle-key }}
+      run: |
+        args=()
+        if [ "$FORCE" = "true" ]; then args+=(--force); fi
+        if [ -n "$MESSAGE" ]; then args+=(--message "$MESSAGE"); fi
+        PYTHONPATH="$DATASET_SYNC_ROOT" "$DATASET_SYNC_PYTHON" -m dataset_sync.publish \
+          --path "$DATA_PATH" \
+          --state-dir "$RUNNER_TEMP/dataset-sync" \
+          --append-only "$APPEND_ONLY" \
+          --huggingface-dataset "$HUGGINGFACE_DATASET" \
+          --huggingface-card "$HUGGINGFACE_CARD" \
+          --kaggle-dataset "$KAGGLE_DATASET" \
+          --kaggle-metadata "$KAGGLE_METADATA" \
+          "${args[@]}"

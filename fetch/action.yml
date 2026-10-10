@@ -1,0 +1,52 @@
+name: Fetch dataset
+description: Replace a directory with the current version of a dataset from its source of truth (Hugging Face or Kaggle).
+
+inputs:
+  from:
+    description: Source of truth to download from, huggingface or kaggle
+    default: huggingface
+  huggingface-dataset:
+    description: owner/name of the Hugging Face dataset repository
+    default: ""
+  kaggle-dataset:
+    description: owner/slug of the Kaggle dataset
+    default: ""
+  path:
+    description: Directory to fill with the dataset files
+    default: data
+  huggingface-token:
+    description: Hugging Face token; only needed for private datasets
+    default: ""
+  kaggle-username:
+    description: Kaggle username
+    default: ""
+  kaggle-key:
+    description: Kaggle API key
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Set up dataset-sync
+      shell: bash
+      run: '"$GITHUB_ACTION_PATH/../setup.sh"'
+
+    # Inputs go through env rather than ${{ }} in scripts so their values are never parsed as shell.
+    - name: Fetch ${{ inputs.from }} dataset
+      shell: bash
+      env:
+        SOURCE: ${{ inputs.from }}
+        HUGGINGFACE_DATASET: ${{ inputs.huggingface-dataset }}
+        KAGGLE_DATASET: ${{ inputs.kaggle-dataset }}
+        DATA_PATH: ${{ inputs.path }}
+        HF_TOKEN: ${{ inputs.huggingface-token }}
+        KAGGLE_USERNAME: ${{ inputs.kaggle-username }}
+        KAGGLE_KEY: ${{ inputs.kaggle-key }}
+      run: |
+        PYTHONPATH="$DATASET_SYNC_ROOT" "$DATASET_SYNC_PYTHON" -m dataset_sync.fetch \
+          --from "$SOURCE" \
+          --path "$DATA_PATH" \
+          --state-dir "$RUNNER_TEMP/dataset-sync" \
+          --huggingface-dataset "$HUGGINGFACE_DATASET" \
+          --kaggle-dataset "$KAGGLE_DATASET" \
+          --replace
