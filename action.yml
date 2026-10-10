@@ -1,0 +1,92 @@
+name: Refresh Kaggle dataset
+description: Download the latest version of a Kaggle dataset, run an update command over it, and upload a new version if any file changed.
+
+inputs:
+  dataset:
+    description: owner/slug of the Kaggle dataset, e.g. ioexception/yugioh-decks
+    required: true
+  command:
+    description: Command that updates the files in data-directory
+    required: true
+  working-directory:
+    description: Directory to run the command from
+    default: "."
+  data-directory:
+    description: Directory, relative to the repository root, that holds the dataset files
+    default: data
+  metadata:
+    description: dataset-metadata.json to upload with the files
+    default: dataset-metadata.json
+  append-only:
+    description: Glob patterns (space or comma separated) of files that may only be appended to; anything else refuses the upload
+    default: ""
+  requirements:
+    description: The caller's requirements file, installed if it exists
+    default: requirements.txt
+  python-version:
+    description: Python version for the update command
+    default: "3.13"
+  kaggle-username:
+    description: Kaggle account that owns the dataset
+    default: ioexception
+  kaggle-key:
+    description: Kaggle API key
+    required: true
+
+outputs:
+  changed:
+    description: "'true' when a new version was uploaded"
+    value: ${{ steps.upload.outputs.changed }}
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v7
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Install dependencies
+      shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        REQUIREMENTS: ${{ inputs.requirements }}
+      run: |
+        python -m pip install --upgrade pip==26.2.1
+        pip install -r "$ACTION_PATH/requirements.txt"
+        if [ -f "$REQUIREMENTS" ]; then
+          pip install -r "$REQUIREMENTS"
+        fi
+
+    # Inputs go through env rather than ${{ }} in scripts so their values are never parsed as shell.
+    - name: Fetch the current dataset version
+      shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        DATASET: ${{ inputs.dataset }}
+        DATA_DIRECTORY: ${{ inputs.data-directory }}
+        FINGERPRINT: ${{ runner.temp }}/kaggle-dataset-fingerprint.json
+        KAGGLE_USERNAME: ${{ inputs.kaggle-username }}
+        KAGGLE_KEY: ${{ inputs.kaggle-key }}
+      run: python "$ACTION_PATH/fetch.py" "$DATASET" "$DATA_DIRECTORY" --fingerprint "$FINGERPRINT" --replace
+
+    - name: Update the dataset
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: ${{ inputs.command }}
+
+    - name: Upload if changed
+      id: upload
+      shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        DATA_DIRECTORY: ${{ inputs.data-directory }}
+        METADATA: ${{ inputs.metadata }}
+        APPEND_ONLY: ${{ inputs.append-only }}
+        FINGERPRINT: ${{ runner.temp }}/kaggle-dataset-fingerprint.json
+        KAGGLE_USERNAME: ${{ inputs.kaggle-username }}
+        KAGGLE_KEY: ${{ inputs.kaggle-key }}
+      run: |
+        python "$ACTION_PATH/upload.py" "$DATA_DIRECTORY" \
+          --fingerprint "$FINGERPRINT" \
+          --metadata "$METADATA" \
+          --append-only "$APPEND_ONLY"
