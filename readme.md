@@ -69,6 +69,8 @@ jobs:
           status: fail
 ```
 
+See [Writing scrapers for dataset-sync](writing-scrapers.md) for how to write the code that updates `data/`.
+
 The repository keeps its code plus each destination's metadata (`dataset-metadata.json` for Kaggle, a dataset card for Hugging Face); the data directory should not be committed.
 
 ## How publishing decides what to upload
