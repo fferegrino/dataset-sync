@@ -40,7 +40,7 @@ jobs:
       - uses: fferegrino/dataset-sync/fetch@v1
         with:
           from: ${{ inputs.source || 'huggingface' }}
-          huggingface-dataset: fferegrino/yugioh-decks
+          huggingface-dataset: feregrino/yugioh-decks
           kaggle-dataset: ioexception/yugioh-decks
           kaggle-username: ioexception
           kaggle-key: ${{ secrets.KAGGLE_KEY }}
@@ -50,7 +50,7 @@ jobs:
 
       - uses: fferegrino/dataset-sync/publish@v1
         with:
-          huggingface-dataset: fferegrino/yugioh-decks
+          huggingface-dataset: feregrino/yugioh-decks
           huggingface-card: dataset-card.md
           kaggle-dataset: ioexception/yugioh-decks
           kaggle-metadata: dataset-metadata.json
@@ -81,6 +81,8 @@ Each upload is a full replacement, the same as a Kaggle version: on Hugging Face
 - `append-only` lists glob patterns of files that may only grow. A run that deletes, shrinks or rewrites the existing bytes of one of them fails before uploading anywhere.
 
 Kaggle keeps every dataset version and a Hugging Face dataset is a git repository, so even a bad upload can be rolled back.
+
+Every call to a destination is retried after 15 and 45 seconds. Kaggle lists files 200 per page and rate limits the calls, so each page of a Kaggle listing is retried on its own, waiting up to four minutes, before the run gives up.
 
 ## Inputs
 

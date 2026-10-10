@@ -2,6 +2,9 @@ import sys
 import time
 
 RETRY_DELAYS_SECONDS = (0, 15, 45)
+# Kaggle lists 200 files per page and rate limits the calls, so a large dataset needs dozens of them. Retrying the
+# page that got throttled, with a longer wait, keeps one 429 from failing the whole listing.
+PAGE_RETRY_DELAYS_SECONDS = (0, 30, 60, 120, 240)
 
 
 def with_retries(action, description, delays=None):
