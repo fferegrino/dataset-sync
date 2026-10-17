@@ -43,8 +43,7 @@ jobs:
           from: ${{ inputs.source || 'huggingface' }}
           huggingface-dataset: feregrino/yugioh-decks
           kaggle-dataset: ioexception/yugioh-decks
-          kaggle-username: ioexception
-          kaggle-key: ${{ secrets.KAGGLE_KEY }}
+          kaggle-api-token: ${{ secrets.KAGGLE_API_TOKEN }}
 
       - uses: actions/setup-node@v5      # or setup-python, setup-go, ...
       - run: npm ci && node download.js  # updates the files in data/
@@ -57,8 +56,7 @@ jobs:
           kaggle-metadata: dataset-metadata.json
           append-only: "*.csv"
           huggingface-token: ${{ secrets.HF_TOKEN }}
-          kaggle-username: ioexception
-          kaggle-key: ${{ secrets.KAGGLE_KEY }}
+          kaggle-api-token: ${{ secrets.KAGGLE_API_TOKEN }}
           healthcheck-url: ${{ secrets.HEALTHCHECK_URL }}
 
       # Reports failures in the steps before publish, which never runs then.
@@ -112,7 +110,8 @@ Pings never fail the job, and an empty URL skips them, so forks and workflows wi
 | `kaggle-dataset` | | `owner/slug` of the Kaggle dataset |
 | `path` | `data` | Directory to fill; replaced entirely |
 | `huggingface-token` | | Only needed for private datasets |
-| `kaggle-username`, `kaggle-key` | | Needed when reading from Kaggle |
+| `kaggle-api-token` | | Kaggle API token; needed when reading from Kaggle |
+| `kaggle-username`, `kaggle-key` | | Legacy alternative to `kaggle-api-token` |
 
 ### `publish`
 
@@ -128,7 +127,8 @@ Pings never fail the job, and an empty URL skips them, so forks and workflows wi
 | `force` | `false` | Upload everywhere even if nothing changed |
 | `allow-deletions` | `false` | Let uploads remove files the fetched data or a destination has but the directory lacks |
 | `huggingface-token` | | Write token, needed when uploading to Hugging Face |
-| `kaggle-username`, `kaggle-key` | | Needed when uploading to Kaggle |
+| `kaggle-api-token` | | Kaggle API token; needed when uploading to Kaggle |
+| `kaggle-username`, `kaggle-key` | | Legacy alternative to `kaggle-api-token` |
 | `healthcheck-url` | | Ping URL of a healthchecks.io check; leave empty to skip the pings |
 
 Outputs: `changed` (`'true'` when the data differs from what `fetch` downloaded) and `uploaded` (comma-separated destinations that received an upload).
@@ -148,7 +148,8 @@ Run the workflow once from the existing source, e.g. `workflow_dispatch` with `s
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
-export HF_TOKEN=... KAGGLE_USERNAME=... KAGGLE_KEY=...
+export HF_TOKEN=... KAGGLE_API_TOKEN=...
+# Or legacy: export KAGGLE_USERNAME=... KAGGLE_KEY=...
 .venv/bin/python -m dataset_sync.fetch --from huggingface --huggingface-dataset owner/name --path data --state-dir .state
 # ... update the files in data/ ...
 .venv/bin/python -m dataset_sync.publish --path data --state-dir .state --huggingface-dataset owner/name --dry-run

@@ -1,6 +1,7 @@
 import fnmatch
 import hashlib
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -349,6 +350,29 @@ class SyncTest(unittest.TestCase):
             with self.assertRaisesRegex(SystemExit, "HF_TOKEN"):
                 self.publish(destinations=[HuggingFace("fferegrino/yugioh-decks"), self.kaggle_backend()])
         self.assertEqual((self.hub.commits, self.kaggle.versions), ([], []))
+
+    def test_kaggle_accepts_api_token_when_legacy_inputs_are_empty(self):
+        # GitHub Actions always export unused credential inputs as ""; those must not block token auth.
+        with mock.patch.dict(
+            "os.environ",
+            {"KAGGLE_USERNAME": "", "KAGGLE_KEY": "", "KAGGLE_API_TOKEN": "tok"},
+            clear=True,
+        ):
+            Kaggle("ioexception/yugioh-decks", self.metadata).check_credentials()
+            self.assertNotIn("KAGGLE_USERNAME", os.environ)
+            self.assertNotIn("KAGGLE_KEY", os.environ)
+            self.assertEqual(os.environ.get("KAGGLE_API_TOKEN"), "tok")
+
+    def test_kaggle_accepts_legacy_username_and_key(self):
+        with mock.patch.dict(
+            "os.environ",
+            {"KAGGLE_USERNAME": "ioexception", "KAGGLE_KEY": "secret", "KAGGLE_API_TOKEN": ""},
+            clear=True,
+        ):
+            Kaggle("ioexception/yugioh-decks", self.metadata).check_credentials()
+            self.assertEqual(os.environ.get("KAGGLE_USERNAME"), "ioexception")
+            self.assertEqual(os.environ.get("KAGGLE_KEY"), "secret")
+            self.assertNotIn("KAGGLE_API_TOKEN", os.environ)
 
     def test_publish_without_fetch_needs_force(self):
         self.data.mkdir()

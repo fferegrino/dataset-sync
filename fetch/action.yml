@@ -18,10 +18,13 @@ inputs:
     description: Hugging Face token; only needed for private datasets
     default: ""
   kaggle-username:
-    description: Kaggle username
+    description: Kaggle username (legacy API key auth; not needed with kaggle-api-token)
     default: ""
   kaggle-key:
-    description: Kaggle API key
+    description: Kaggle legacy API key (use with kaggle-username)
+    default: ""
+  kaggle-api-token:
+    description: Kaggle API token (preferred; alternative to kaggle-username + kaggle-key)
     default: ""
 
 runs:
@@ -42,6 +45,7 @@ runs:
         HF_TOKEN: ${{ inputs.huggingface-token }}
         KAGGLE_USERNAME: ${{ inputs.kaggle-username }}
         KAGGLE_KEY: ${{ inputs.kaggle-key }}
+        KAGGLE_API_TOKEN: ${{ inputs.kaggle-api-token }}
       run: |
         PYTHONPATH="$DATASET_SYNC_ROOT" "$DATASET_SYNC_PYTHON" -m dataset_sync.fetch \
           --from "$SOURCE" \

@@ -31,6 +31,11 @@ class Kaggle:
     def check_credentials(self):
         if self._api is not None:
             return
+        # Composite actions always export the credential inputs; an unused one arrives as "".
+        # Drop those so the Kaggle client does not treat empty username/key as legacy auth.
+        for name in ("KAGGLE_USERNAME", "KAGGLE_KEY", "KAGGLE_API_TOKEN"):
+            if name in os.environ and not os.environ[name]:
+                del os.environ[name]
         has_key = os.environ.get("KAGGLE_USERNAME") and os.environ.get("KAGGLE_KEY")
         if not (has_key or os.environ.get("KAGGLE_API_TOKEN")):
             raise SystemExit("Set KAGGLE_USERNAME and KAGGLE_KEY, or KAGGLE_API_TOKEN, to use Kaggle")
