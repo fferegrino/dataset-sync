@@ -50,6 +50,7 @@ class ClientSignatureTest(unittest.TestCase):
     @unittest.skipIf(KaggleApi is None, "kaggle is not installed")
     def test_kaggle_calls(self):
         api = mock.create_autospec(KaggleApi, instance=True)
+        api.dataset_status.return_value = "ready"
         api.dataset_list_files.return_value = ApiListDatasetFilesResponse()
         backend = Kaggle("owner/decks", metadata=self.metadata, api=api)
         self.assertEqual(backend.listing(), {})
@@ -58,6 +59,20 @@ class ClientSignatureTest(unittest.TestCase):
         api.dataset_download_files.assert_called_once()
         backend.upload(self.data, "message")
         api.dataset_create_version.assert_called_once()
+        api.dataset_create_new.assert_not_called()
+
+    @unittest.skipIf(KaggleApi is None, "kaggle is not installed")
+    def test_kaggle_creates_dataset_when_status_is_forbidden(self):
+        api = mock.create_autospec(KaggleApi, instance=True)
+        api.dataset_status.side_effect = RuntimeError("403 Client Error: Forbidden")
+        api.dataset_create_new.return_value = mock.Mock(error=None)
+        backend = Kaggle("owner/decks", metadata=self.metadata, api=api)
+        self.assertEqual(backend.listing(), {})
+        api.dataset_list_files.assert_not_called()
+        backend.upload(self.data, "message")
+        api.dataset_create_new.assert_called_once()
+        api.dataset_create_version.assert_not_called()
+        self.assertTrue(api.dataset_create_new.call_args.kwargs.get("public"))
 
 
 if __name__ == "__main__":

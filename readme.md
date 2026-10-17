@@ -142,7 +142,7 @@ Outputs: `changed` (`'true'` when the data differs from what `fetch` downloaded)
 
 ## Adding a new destination
 
-Run the workflow once from the existing source, e.g. `workflow_dispatch` with `source: kaggle` to seed an empty Hugging Face dataset; Hugging Face mirrors are synced on every run. A new Kaggle mirror needs one run with `force: true`.
+Run the workflow once from the existing source, e.g. `workflow_dispatch` with `source: kaggle` to seed an empty Hugging Face dataset; Hugging Face mirrors are synced on every run. A new Kaggle dataset is created on first upload (`dataset_create_new`) when the slug does not exist yet — Kaggle returns 403 for a missing slug, which used to look like a permission error during the deletion check. Hugging Face still needs the repository to exist beforehand. Pass `force: true` when seeding a destination that was not the source of the last fetch.
 
 ## Running locally
 
