@@ -33,10 +33,13 @@ inputs:
     description: Hugging Face token with write access
     default: ""
   kaggle-username:
-    description: Kaggle username
+    description: Kaggle username (legacy API key auth; not needed with kaggle-api-token)
     default: ""
   kaggle-key:
-    description: Kaggle API key
+    description: Kaggle legacy API key (use with kaggle-username)
+    default: ""
+  kaggle-api-token:
+    description: Kaggle API token (preferred; alternative to kaggle-username + kaggle-key)
     default: ""
   healthcheck-url:
     description: healthchecks.io-style ping URL, pinged when publishing succeeds (even with nothing to upload) and at /fail when it fails; leave empty to skip
@@ -73,6 +76,7 @@ runs:
         HF_TOKEN: ${{ inputs.huggingface-token }}
         KAGGLE_USERNAME: ${{ inputs.kaggle-username }}
         KAGGLE_KEY: ${{ inputs.kaggle-key }}
+        KAGGLE_API_TOKEN: ${{ inputs.kaggle-api-token }}
       run: |
         args=()
         if [ "$FORCE" = "true" ]; then args+=(--force); fi
