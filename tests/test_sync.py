@@ -32,7 +32,7 @@ def read_tree(folder):
 class FakeKaggleApi:
     """Stores the dataset the way Kaggle does: each version replaces every file."""
 
-    def __init__(self, files, download_failures=0, upload_failures=0):
+    def __init__(self, files, download_failures=0, upload_failures=0, missing=False):
         self.files = dict(files)
         self.served = None  # what a download returns, when it should differ from what is stored
         self.download_failures = download_failures
@@ -40,8 +40,18 @@ class FakeKaggleApi:
         self.throttled_pages = {}  # page token -> how many more times that page answers 429
         self.list_calls = 0
         self.versions = []
+        self.created = []
+        # Kaggle returns 403 for a slug that has never been uploaded, same as the real API.
+        self.missing = missing
+
+    def dataset_status(self, dataset):
+        if self.missing:
+            raise RuntimeError("403 Client Error: Forbidden for url: https://api.kaggle.com/v1/datasets.status")
+        return "ready"
 
     def dataset_download_files(self, dataset, path, force, quiet, unzip):
+        if self.missing:
+            raise RuntimeError("403 Client Error: Forbidden")
         if self.download_failures:
             self.download_failures -= 1
             raise RuntimeError("download blip")
@@ -50,6 +60,11 @@ class FakeKaggleApi:
                 bundle.writestr(name, content)
 
     def dataset_list_files(self, dataset, page_token=None, page_size=20):
+        if self.missing:
+            raise RuntimeError(
+                "403 Client Error: Forbidden for url: "
+                "https://api.kaggle.com/v1/datasets.DatasetApiService/ListDatasetFiles"
+            )
         # One file per page, so every listing exercises pagination.
         self.list_calls += 1
         if self.throttled_pages.get(page_token):
@@ -62,12 +77,25 @@ class FakeKaggleApi:
         return SimpleNamespace(files=page, next_page_token=next_token, error_message="")
 
     def dataset_create_version(self, folder, message, dir_mode, quiet):
+        if self.missing:
+            raise RuntimeError("cannot version a dataset that does not exist")
         if self.upload_failures:
             self.upload_failures -= 1
             raise RuntimeError("upload blip")
         tree = read_tree(folder)
         self.versions.append((message, json.loads(tree.pop("dataset-metadata.json"))["id"]))
         self.files = tree
+
+    def dataset_create_new(self, folder, public=False, quiet=False, convert_to_csv=True, dir_mode="skip"):
+        if self.upload_failures:
+            self.upload_failures -= 1
+            raise RuntimeError("upload blip")
+        tree = read_tree(folder)
+        dataset_id = json.loads(tree.pop("dataset-metadata.json"))["id"]
+        self.created.append((dataset_id, public))
+        self.files = tree
+        self.missing = False
+        return SimpleNamespace(error=None, status="ok")
 
 
 class FakeHfApi:
@@ -239,6 +267,27 @@ class SyncTest(unittest.TestCase):
     def test_force_reuploads_kaggle_mirror(self):
         self.fetch_from(self.huggingface())
         self.assertEqual(self.publish(force=True), ["kaggle", "huggingface"])
+
+    def test_missing_kaggle_dataset_is_created_on_first_publish(self):
+        # Kaggle answers 403 for a slug that was never created; treat that as empty and create_new.
+        self.kaggle = FakeKaggleApi({}, missing=True)
+        self.data.mkdir()
+        for name, content in DECKS.items():
+            (self.data / name).write_bytes(content)
+        self.assertEqual(
+            self.publish(force=True, destinations=[self.kaggle_backend()]),
+            ["kaggle"],
+        )
+        self.assertEqual(self.kaggle.created, [("ioexception/yugioh-decks", True)])
+        self.assertEqual(self.kaggle.versions, [])
+        self.assertEqual(self.kaggle.files, DECKS)
+        self.assertFalse(self.kaggle.missing)
+
+    def test_fetch_refuses_a_missing_kaggle_dataset(self):
+        self.kaggle = FakeKaggleApi({}, missing=True)
+        with self.assertRaisesRegex(SystemExit, "does not exist yet"):
+            self.fetch_from(self.kaggle_backend())
+        self.assertFalse(self.data.exists())
 
     def test_hub_drops_files_removed_locally_but_keeps_repo_files(self):
         self.hub.files["00000099.csv"] = b"gone"

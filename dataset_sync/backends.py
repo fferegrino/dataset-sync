@@ -48,6 +48,11 @@ class Kaggle:
             raise SystemExit(f"{self.metadata} is for {metadata_id!r}, not {self.dataset!r}")
 
     def download(self, destination):
+        if not self.exists():
+            raise SystemExit(
+                f"Kaggle dataset {self.dataset} does not exist yet; create it with publish --force, "
+                f"or pick an existing dataset"
+            )
         with tempfile.TemporaryDirectory() as scratch:
             self.api.dataset_download_files(self.dataset, path=scratch, force=True, quiet=True, unzip=False)
             archives = sorted(Path(scratch).glob("*.zip"))
@@ -56,7 +61,28 @@ class Kaggle:
             with zipfile.ZipFile(archives[0]) as bundle:
                 bundle.extractall(destination)
 
+    def exists(self):
+        """Return whether the dataset is already on Kaggle.
+
+        Kaggle answers 403 (not 404) for a slug that has never been created, the same as for a private
+        dataset the token cannot see. The official client treats that the same way when deciding
+        between create_new and create_version, so we follow it.
+        """
+        try:
+            self.api.dataset_status(self.dataset)
+            return True
+        except Exception as exc:
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+            if status in (403, 404):
+                return False
+            text = str(exc)
+            if "403" in text or "404" in text:
+                return False
+            raise
+
     def listing(self):
+        if not self.exists():
+            return {}
         files = {}
         page_token = None
         while True:
@@ -73,12 +99,21 @@ class Kaggle:
 
     def pending_deletions(self, directory):
         # A new version replaces every file, so anything Kaggle has that the directory lacks would disappear.
+        # A dataset that does not exist yet has nothing to delete.
         local = {name for name, _path in data_files(directory)}
         return sorted(name for name in self.listing() if is_data_path(name) and name not in local)
 
     def upload(self, directory, message):
         with staged(directory, {"dataset-metadata.json": self.metadata}) as folder:
-            self.api.dataset_create_version(str(folder), message, dir_mode="zip", quiet=False)
+            if self.exists():
+                self.api.dataset_create_version(str(folder), message, dir_mode="zip", quiet=False)
+                return
+            # First publish: create the dataset instead of a version of one that is not there.
+            response = self.api.dataset_create_new(str(folder), public=True, quiet=False, dir_mode="zip")
+            error = getattr(response, "error", None)
+            if error:
+                raise RuntimeError(f"Kaggle could not create {self.dataset}: {error}")
+            print(f"Created Kaggle dataset {self.dataset}")
 
 
 class HuggingFace:
