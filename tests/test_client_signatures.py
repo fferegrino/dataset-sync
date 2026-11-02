@@ -1,4 +1,5 @@
 """The sync tests use hand-written fakes; these check the calls also match the real client libraries' signatures."""
+import importlib.util
 import io
 import sys
 import tempfile
@@ -17,13 +18,20 @@ try:
 except ImportError:
     HfApi = None
 
-try:
+
+def _load_kaggle():
+    # A missing install skips the live-client tests. A broken install (kaggle is present
+    # but a dependency such as six is not) must fail here, or publish fails the same way in CI.
+    if importlib.util.find_spec("kaggle") is None:
+        return None, None
     # Importing the kaggle package tries to authenticate and prints instructions when it cannot.
     with redirect_stdout(io.StringIO()):
         from kaggle.api.kaggle_api_extended import KaggleApi
         from kagglesdk.datasets.types.dataset_api_service import ApiListDatasetFilesResponse
-except ImportError:
-    KaggleApi = None
+    return KaggleApi, ApiListDatasetFilesResponse
+
+
+KaggleApi, ApiListDatasetFilesResponse = _load_kaggle()
 
 
 class ClientSignatureTest(unittest.TestCase):
